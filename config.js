@@ -15,5 +15,5 @@ window.CLOUD_CFG = {
 
   // 3. Ключ подписи мастера. Скопируйте его из Настройки → Безопасность после создания пароля.
   //    Пока поле пустое, защита подписью выключена.
-  masterKey: ''
+  masterKey: 'BAouASGBMiEmWxSmNnjdPGoJ-73NljaGJDxd-KOWHy64S8T1Cy5VveYRk8KiOpjehOPfhQWqTvr-VeIbNreroxU'
 };
