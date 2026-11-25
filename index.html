@@ -227,7 +227,6 @@ const EX={
 'Удалить отзыв?':['Пікірді жою керек пе?','Delete this review?'],'Удалить фото?':['Фотоны жою керек пе?','Delete this photo?'],
 'Мои отзывы':['Менің пікірлерім','My reviews'],'опубликован':['жарияланған','published'],'на проверке':['тексеруде','under review'],
 '🔔 Новое: заказ':['🔔 Жаңа: тапсырыс','🔔 New: order'],
-'Память устройства заполнена. Подключите облако, чтобы фото не терялись.':['Құрылғы жады толы. Фото жоғалмауы үшін бұлтты қосыңыз.','Device storage is full. Connect the cloud so photos are not lost.'],
 'Алматы':['Алматы','Almaty'],'📍 Алматы':['📍 Алматы','📍 Almaty'],
 'Клиент':['Клиент','Client'],'Мастер':['Шебер','Master'],'Мастер 🔔':['Шебер 🔔','Master 🔔'],
 'Главная':['Басты бет','Home'],'Запись':['Жазылу','Booking'],'Магазин':['Дүкен','Shop'],'Профиль':['Профиль','Profile'],
@@ -531,8 +530,20 @@ const rlOk=n=>{const m=RLM[n];if(!m)return true;const t=Date.now();if(RLT[n]&&t-
 /* ===== ДАННЫЕ: офлайн-хранилище + очередь синхронизации ===== */
 let DB=ld('dm_db',{}),Q=ld('dm_q',[]),last=ld('dm_last',0),busy=0,mAuth=0,me=ld('dm_me',null);
 const col=n=>(DB[n]||[]).filter(x=>!x.del),getI=(n,id)=>(DB[n]||[]).find(x=>x.id==id&&!x.del);
-for(const n of Object.keys(DB)){if(!COLS.includes(n)||!Array.isArray(DB[n])){delete DB[n];continue}DB[n]=DB[n].filter(x=>okRow(n,x))}
-function saveDB(){try{localStorage.setItem('dm_db',JSON.stringify(DB))}catch(e){try{const c={};for(const k in DB)c[k]=DB[k].map(it=>(it.im&&it.im.length)?{...it,im:Array.isArray(it.im)?[]:'',u:0}:it);localStorage.setItem('dm_db',JSON.stringify(c));if(!saveDB.w){saveDB.w=1;setTimeout(()=>toast('Память устройства заполнена. Подключите облако, чтобы фото не терялись.'),300)}}catch(x){}}}
+const sanitizeDB=()=>{for(const n of Object.keys(DB)){if(!COLS.includes(n)||!Array.isArray(DB[n])){delete DB[n];continue}DB[n]=DB[n].filter(x=>okRow(n,x))}};sanitizeDB();
+/* --- Хранение базы: IndexedDB (много места для фото); localStorage только как запасной вариант --- */
+const IDB_ON=(()=>{try{return typeof indexedDB!='undefined'&&!!indexedDB}catch(e){return false}})();
+const idbOpen=()=>new Promise((res,rej)=>{const r=indexedDB.open('diamond-db',1);r.onupgradeneeded=()=>r.result.createObjectStore('kv');r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)});
+const idbGet=async k=>{const d=await idbOpen();return new Promise((res,rej)=>{const q=d.transaction('kv').objectStore('kv').get(k);q.onsuccess=()=>{res(q.result);d.close()};q.onerror=()=>{rej(q.error);d.close()}})};
+const idbSet=async(k,v)=>{const d=await idbOpen();return new Promise((res,rej)=>{const t=d.transaction('kv','readwrite');t.objectStore('kv').put(v,k);t.oncomplete=()=>{d.close();res()};t.onerror=()=>{d.close();rej(t.error)};t.onabort=()=>{d.close();rej(t.error)}})};
+const lsSave=()=>{try{localStorage.setItem('dm_db',JSON.stringify(DB));return 1}catch(e){return 0}};
+let dbLoaded=!(IDB_ON&&ld('dm_idb',0)),wT=null;
+async function flushDB(){wT=null;try{await idbSet('db',DB);if(!ld('dm_idb',0))sv('dm_idb',1);try{localStorage.removeItem('dm_db')}catch(e){}}catch(e){if(lsSave())try{localStorage.removeItem('dm_idb')}catch(x){}}}
+function saveDB(){if(!IDB_ON){lsSave();return}if(!dbLoaded)return;clearTimeout(wT);wT=setTimeout(flushDB,200)}
+const dbReady=(async()=>{if(dbLoaded)return;try{const d=await idbGet('db');if(d&&typeof d=='object'&&!Array.isArray(d)){DB=d;sanitizeDB()}}catch(e){}dbLoaded=true;try{nav();R()}catch(e){}})();
+const flushNow=()=>{if(IDB_ON&&dbLoaded&&wT){clearTimeout(wT);flushDB()}};
+addEventListener('pagehide',flushNow);addEventListener('visibilitychange',()=>{if(document.hidden)flushNow()});
+if(IDB_ON&&dbLoaded&&localStorage.getItem('dm_db'))saveDB();
 function put(n,it){const nu=!(DB[n]||[]).some(x=>x.id==it.id);if(nu&&!mAuth&&!rlOk(n))return;it.u=Date.now();delete it.sig;DB[n]=DB[n]||[];const i=DB[n].findIndex(x=>x.id==it.id);if(i<0)DB[n].push(it);else DB[n][i]=it;saveDB();const k=n+'/'+it.id;if(!Q.includes(k)){Q.push(k);sv('dm_q',Q)}sync();if(n=='V')bS()}
 const rm=(n,id)=>{const it=(DB[n]||[]).find(x=>x.id==id);if(it){it.del=1;put(n,it)}};
 const stat=t=>{$('#st').textContent=t};
@@ -541,7 +552,7 @@ const hdr=()=>{const H={apikey:CLOUD.key,'Content-Type':'application/json'};if(/
 const fail=async(r,w)=>{lastErr=w+' '+r.status+' '+(await r.text()).slice(0,120);throw new Error(lastErr)};
 async function sync(){if(!CLOUD.url){stat('💾');return}if(busy){sync.p=1;return}if(!navigator.onLine){stat('📴');return}busy=1;
  try{const H=hdr(),B0=CLOUD.url+'/rest/v1/dia';
-  await pinReady;
+  await dbReady;await pinReady;
   if(Q.length){const sent=Q.slice(),rows=[],done=[];for(const k of sent){const[n,id]=k.split('/');const it=(DB[n]||[]).find(x=>x.id==id);if(!it||!it.u){done.push(k);continue}
     if(isProt(n,it)&&!it.sig){await mkReady;if(MKEY)it.sig=await signRow(n,it);else if(PUBK)continue}
     rows.push({id:k,coll:n,data:it,u:it.u});done.push(k)}
@@ -979,7 +990,7 @@ function secHtml(){const rec=getI('C','mkey'),pin=!!PUBK&&!PINBAD,match=pin&&rec
 const mlo=()=>{mAuth=0;MKEY=null;try{sessionStorage.removeItem('dm_sk')}catch(e){}sv('dm_role','c');sv('dm_tab','home');setRole('c')};
 setInterval(()=>{if(tab=='set'&&mAuth)genR()},1000);
 applyLang();if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
-pinReady.then(purge);mkReady.then(()=>{if(mAuth&&!MKEY){mAuth=0;if(role=='m'){role='c';nav();R()}}});
+dbReady.then(()=>pinReady).then(purge);mkReady.then(()=>{if(mAuth&&!MKEY){mAuth=0;if(role=='m'){role='c';nav();R()}}});
 nav();R();sync();rt();setInterval(sync,10000);addEventListener('online',()=>{sync();rt()});
 
 </script></body></html>
